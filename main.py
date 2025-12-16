@@ -2,12 +2,29 @@ import discord
 from discord.ext import commands
 from datetime import datetime
 import os
+from flask import Flask
+from threading import Thread
+
+# --- KEEP ALIVE SECTION (FOR RENDER) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+# ---------------------------------------
 
 # --- CONFIGURATION ---
-# We get the token from Railway's "Variables" tab later
 TOKEN = os.getenv("DISCORD_TOKEN") 
 SWC_ROLE_NAME = "Senior Workflow Coordinator" 
 
+# EMOJI MAPPING
 EMOJI_TO_FILE = {
     "QB": "QUARTR BATCH FILE",
     "QL": "QUARTR LIVE FILE",
@@ -19,7 +36,6 @@ EMOJI_TO_FILE = {
     "🇭": "HP FILE",          
     "🇦": "AIERA BATCH FILE", 
 }
-# ---------------------
 
 intents = discord.Intents.default()
 intents.members = True
@@ -65,18 +81,25 @@ async def on_raw_reaction_add(payload):
         file_type = EMOJI_TO_FILE[emoji_name]
 
         dm_content = (
-            f"Hello {editor.mention}, you have been assigned a **{file_type}** at {time_tag}. Please start on them immediately.\n\n"
-            f"Reminder that if no movement is observed on your file for at least 5 minutes, and if your file is at risk of breaching TAT, SWC may REASSIGN your file without prior notice.\n\n"
-            f"If you will take longer on a file, keep @Senior Workflow Coordinator properly appraised. Include your reasons."
+            f"Hello {editor.mention}, you have been assigned a **{file_type}** "
+            f"at {time_tag}. Please start on them immediately.\n\n"
+            f"Reminder that if no movement is observed on your file for at least 5 minutes, "
+            f"and if your file is at risk of breaching TAT, @Senior Workflow Coordinator may "
+            f"REASSIGN your file without prior notice. If you will take longer on a file, "
+            f"keep @Senior Workflow Coordinator properly appraised. Include your reasons."
         )
 
         try:
             await editor.send(dm_content)
             await message.add_reaction("✅")
         except discord.Forbidden:
-            await channel.send(f"{editor.mention} ⚠️ I cannot DM you. You are assigned: **{file_type}** at {time_tag}. Please start on them immediately.")
+            await channel.send(f"{editor.mention} ⚠️ I cannot DM you. Assigned: **{file_type}**.")
 
+# START THE FAKE WEB SERVER BEFORE THE BOT
+keep_alive()
+
+# START THE BOT
 if TOKEN:
     bot.run(TOKEN)
 else:
-    print("Error: DISCORD_TOKEN not found in environment variables.")
+    print("Error: DISCORD_TOKEN not found.")
