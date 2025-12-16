@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands, ui
 from datetime import datetime
 import os
+import json
 from flask import Flask
 from threading import Thread
 
@@ -31,10 +32,9 @@ EMOJI_TO_FILE = {
     "HP": "HP FILE",
     "AB": "AIERA BATCH FILE",
     "AL": "AIERA LIVE FILE",
-    "🇶": "QUARTR BATCH FILE", 
-    "🇱": "QUARTR LIVE FILE",  
-    "🇭": "HP FILE",          
-    "🇦": "AIERA BATCH FILE", 
+    "🇶": "QUARTR FILE", 
+    "🇭": "HP FILE",           
+    "🇦": "AIERA FILE", 
 }
 
 FILE_CHOICES = [
@@ -45,52 +45,201 @@ FILE_CHOICES = [
     app_commands.Choice(name="Quartr Batch", value="QUARTR BATCH FILE"),
 ]
 
-# --- THE QUEUE ---
+# --- PERSISTENCE & DATA MANAGEMENT ---
+QUEUE_FILE = "queue.json"
+CONFIG_FILE = "config.json"
+
+# Global Variables
 work_queue = []
+server_configs = {} # Stores log channels per server: {"guild_id": channel_id}
+available_cooldowns = {} # Stores last usage: {user_id: timestamp}
 
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
+def load_data():
+    """Loads queue and config from JSON files on startup."""
+    global work_queue, server_configs
+    
+    # Load Queue
+    if os.path.exists(QUEUE_FILE):
+        try:
+            with open(QUEUE_FILE, "r") as f:
+                work_queue = json.load(f)
+                print(f"Loaded {len(work_queue)} users from queue file.")
+        except Exception as e:
+            print(f"Error loading queue: {e}")
+            work_queue = []
+    
+    # Load Configs
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                server_configs = json.load(f)
+                print("Loaded server configurations.")
+        except Exception as e:
+            print(f"Error loading config: {e}")
+            server_configs = {}
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+def save_queue():
+    """Saves the current queue to JSON file."""
+    try:
+        with open(QUEUE_FILE, "w") as f:
+            json.dump(work_queue, f)
+    except Exception as e:
+        print(f"Failed to save queue: {e}")
+
+def save_config():
+    """Saves server configs to JSON file."""
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(server_configs, f)
+    except Exception as e:
+        print(f"Failed to save config: {e}")
 
 # --- HELPER FUNCTIONS ---
 def is_swc(interaction: discord.Interaction):
-    user_roles = [role.name for role in interaction.user.roles]
-    return SWC_ROLE_NAME in user_roles
+    # Check by Role Name
+    if not isinstance(interaction.user, discord.Member): return False
+    user_role_names = [role.name for role in interaction.user.roles]
+    return SWC_ROLE_NAME in user_role_names
 
 def get_time_tag():
     current_unix_time = int(datetime.now().timestamp())
     return f"<t:{current_unix_time}:F>"
 
+async def send_log(guild, content=None, embed=None):
+    """Sends a log message to the configured channel for that guild."""
+    if not guild: return
+    
+    guild_id_str = str(guild.id)
+    if guild_id_str in server_configs:
+        channel_id = server_configs[guild_id_str]
+        channel = guild.get_channel(channel_id)
+        if channel:
+            try:
+                await channel.send(content=content, embed=embed)
+            except:
+                pass
+
 # --- SHARED ASSIGNMENT LOGIC ---
-async def assign_logic(user, file_type, channel):
+async def assign_logic(user, file_type, channel, assigner):
     time_tag = get_time_tag()
     
     # 1. Remove from Queue if present
     global work_queue
-    if any(item['user'].id == user.id for item in work_queue):
-        work_queue = [item for item in work_queue if item['user'].id != user.id]
+    in_queue = False
+    if any(item['user_id'] == user.id for item in work_queue):
+        work_queue = [item for item in work_queue if item['user_id'] != user.id]
+        save_queue()
+        in_queue = True
 
     # 2. DM Content
     dm_content = (
         f"# Hello {user.mention}! You have been assigned a **{file_type}** at {time_tag}.\n\n" 
         f"## Please start on them immediately.\n\n"
         f"### REMINDERS:\n\n"
-        f"- If no movement is observed on your file for at least 5 minutes, and if your file is at risk of breaching TAT, Senior Workflow Coordinator may REASSIGN your file without prior notice.\n"
-        f"- If you will take longer on a file, keep the SWC properly appraised. Include your reasons and estimated TAT."
+        f"- If no movement is observed on your file for at least 5 minutes, and if your file is at risk of breaching TAT, the SWCs may REASSIGN your file without prior notice.\n"
+        f"- If you will take longer on a file, keep the SWCs properly appraised. Include your reasons and estimated TAT."
     )
 
-    # 3. Send DM
+    # 3. Send Messages (Smart Logic)
     try:
+        # Try to send DM
         await user.send(dm_content)
+        
+        # IF DM SUCCEEDS, send the normal public message:
+        await channel.send(f"💼 {user.mention} has been assigned a **{file_type}** at {time_tag}.")
+        
     except discord.Forbidden:
-        await channel.send(f"{user.mention} ⚠️ I cannot DM you, but you are assigned.")
+        # IF DM FAILS (Blocked), send ONE combined public message:
+        await channel.send(f"⚠️ {user.mention} (I cannot DM you) — You have been assigned a **{file_type}** at {time_tag}. Please check your privacy settings.")
 
-    # 4. Public Message (Briefcase)
-    await channel.send(f"💼 {user.mention} has been assigned a **{file_type}** at {time_tag}.")
+    # 4. Log Action
+    log_embed = discord.Embed(title="File Assigned", color=discord.Color.green())
+    log_embed.add_field(name="Editor", value=f"{user.display_name} ({user.id})", inline=True)
+    log_embed.add_field(name="File Type", value=file_type, inline=True)
+    log_embed.add_field(name="Assigned By", value=assigner.display_name, inline=False)
+    log_embed.set_footer(text=f"Was in queue: {in_queue}")
+    await send_log(channel.guild, embed=log_embed)
 
-# --- MODALS (POPUPS) ---
+# --- TAT CALCULATOR LOGIC ---
+
+class TATModal(ui.Modal):
+    def __init__(self, file_type):
+        super().__init__(title=f"TAT Calculator: {file_type}")
+        self.file_type = file_type
+
+    audio_len = ui.TextInput(label="Audio Length", placeholder="HH:MM:SS (e.g. 01:30:00)", max_length=8)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        time_str = self.audio_len.value.strip()
+        
+        # Parse Time
+        try:
+            parts = list(map(int, time_str.split(':')))
+            if len(parts) == 3:
+                h, m, s = parts
+            elif len(parts) == 2:
+                h, m, s = 0, parts[0], parts[1]
+            else:
+                raise ValueError
+            
+            total_seconds = h * 3600 + m * 60 + s
+            ah_decimal = total_seconds / 3600
+        except:
+            await interaction.response.send_message("❌ Invalid format. Please use HH:MM:SS (e.g., 01:00:00)", ephemeral=True)
+            return
+
+        # Calculate TATs
+        fr_tat = 0
+        sv_tat = 0
+        overall_tat = 0
+        
+        if "Quartr" in self.file_type:
+            fr_tat = total_seconds * 0.5
+            sv_tat = total_seconds * 1.5
+            overall_tat = total_seconds * 2.0
+        elif "Aiera" in self.file_type:
+            fr_tat = total_seconds * 0.5
+            sv_tat = total_seconds * 0.3 
+            overall_tat = total_seconds * 3.5 
+        elif "HP" in self.file_type:
+            # HP is fixed: 1hr 30mins overall
+            overall_tat = 90 * 60 
+        
+        def fmt(seconds):
+            if seconds == 0: return "N/A"
+            m, s = divmod(seconds, 60)
+            h, m = divmod(m, 60)
+            return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
+
+        msg = (
+            f"# TAT Calculator\n"
+            f"**`Audio Length:`** {time_str} [AH: {ah_decimal:.2f}]\n"
+            f"**`FR TAT`:** {fmt(fr_tat)}\n"
+            f"__**`SV TAT:`** {fmt(sv_tat)}__\n" 
+            f"**`OVERALL TAT:`** {fmt(overall_tat)}\n\n"
+            f"You can also use this Workflow Logger for TATs: https://fdeditor-workflowtimer.vercel.app/"
+        )
+        
+        await interaction.response.send_message(msg, ephemeral=True)
+
+class TATView(ui.View):
+    def __init__(self):
+        super().__init__()
+
+    @discord.ui.select(
+        placeholder="Select File Type to Calculate...",
+        options=[
+            discord.SelectOption(label="Quartr File", value="Quartr"),
+            discord.SelectOption(label="Aiera File", value="Aiera"),
+            discord.SelectOption(label="HP File", value="HP"),
+        ]
+    )
+    async def select_callback(self, interaction: discord.Interaction, select: ui.Select):
+        file_cat = select.values[0]
+        await interaction.response.send_modal(TATModal(file_cat))
+
+
+# --- MODALS (FORMS) ---
 
 class AvailabilityModal(ui.Modal):
     def __init__(self, title_text):
@@ -102,43 +251,46 @@ class AvailabilityModal(ui.Modal):
     reason = ui.TextInput(label="Reason", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Build the message
         msg = (
-            f"**{self.title} Request**\n"
-            f"**Name:** {self.name.value}\n"
-            f"**Date/Time:** {self.time_affected.value}\n"
-            f"**Change:** {self.change_type.value}\n"
-            f"**Reason:** {self.reason.value}"
+            f"## {self.title} Request\n"
+            f"**`EDITOR:`** {interaction.user.mention}\n"
+            f"**`NAME:`** {self.name.value}\n"
+            f"**`DATE AND TIME AFFECTED:`** {self.time_affected.value}\n"
+            f"**`CHANGE REQUESTED:`** {self.change_type.value}\n"
+            f"**`REASON:`** {self.reason.value}"
         )
         await interaction.response.send_message(msg)
+        # Log it
+        log_embed = discord.Embed(title=f"{self.title} Request", description=self.reason.value, color=discord.Color.orange())
+        log_embed.set_author(name=interaction.user.display_name)
+        await send_log(interaction.guild, content=msg)
 
-class TATDelayModal(ui.Modal, title="TAT Delay Report"):
+class PermissionTATModal(ui.Modal, title="Permission to exceed TAT"):
     file_name = ui.TextInput(label="File Name")
     reason = ui.TextInput(label="Reason for TAT delay", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         msg = (
-            f"**TAT Delay Reported**\n"
-            f"**Editor:** {interaction.user.mention}\n"
-            f"**File Name:** {self.file_name.value}\n"
-            f"**Reason:** {self.reason.value}\n"
-            f"@{SWC_ROLE_NAME}" # Mentions the role if it exists and is mentionable
+            f"## Permission to exceed TAT\n"
+            f"**`EDITOR:`** {interaction.user.mention}\n"
+            f"**`FILE NAME:`** {self.file_name.value}\n"
+            f"**REASON:** {self.reason.value}"
         )
         await interaction.response.send_message(msg)
+        await send_log(interaction.guild, content=msg)
 
 class FileUpdateModal(ui.Modal, title="File Update"):
     file_name = ui.TextInput(label="File Name")
     update_text = ui.TextInput(label="File Update", style=discord.TextStyle.paragraph)
-    status = ui.TextInput(label="File Status", placeholder="e.g. FDF, WIP, Uploading")
+    status = ui.TextInput(label="File Status", placeholder="e.g. FDF, SV, FR")
 
     async def on_submit(self, interaction: discord.Interaction):
         msg = (
-            f"**File Update**\n"
-            f"**Editor:** {interaction.user.mention}\n"
-            f"**File Name:** {self.file_name.value}\n"
-            f"**File Update:** {self.update_text.value}\n"
-            f"**File Status:** {self.status.value}\n"
-            f"@{SWC_ROLE_NAME}"
+            f"## File Update\n"
+            f"**EDITOR:** {interaction.user.mention}\n"
+            f"**FILE NAME:** {self.file_name.value}\n"
+            f"**FILE UPDATE:** {self.update_text.value}\n"
+            f"**FILE STATUS:** {self.status.value}"
         )
         await interaction.response.send_message(msg)
 
@@ -160,17 +312,21 @@ class AssignView(ui.View):
         ]
     )
     async def select_callback(self, interaction: discord.Interaction, select: ui.Select):
-        # Perform assignment
         file_type = select.values[0]
-        await interaction.response.defer() # Acknowledge the click so it doesn't fail
-        await assign_logic(self.member, file_type, self.channel)
+        await interaction.response.defer() 
+        await assign_logic(self.member, file_type, self.channel, interaction.user)
         await interaction.followup.send(f"Assigned {file_type} to {self.member.display_name}", ephemeral=True)
 
 
-# --- BOT EVENTS ---
+# --- BOT SETUP ---
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
+    load_data() # Load JSONs
     print(f'Logged in as {bot.user}')
     try:
         synced = await bot.tree.sync()
@@ -182,83 +338,119 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot: return
 
-# Inside on_message event...
+    # --- "Available" Listener Logic ---
     if message.content.strip().lower() == "available":
-        if any(item['user'].id == message.author.id for item in work_queue):
-            await message.add_reaction("⚠️") 
+        # Check if already in queue
+        if any(item['user_id'] == message.author.id for item in work_queue):
+            # User IS in queue -> JUST REACT (No reply)
+            await message.add_reaction("✍🏼") 
         else:
+            # User NOT in queue -> ADD & REPLY
             work_queue.append({
-                'user': message.author,
+                'user_id': message.author.id,
+                'name': message.author.display_name, # Fallback name
                 'time': int(datetime.now().timestamp())
             })
+            save_queue()
             
-            # 1. Public Message
-            await message.channel.send(f"{message.author.mention} is available for a file. Added to the queue.")
+            # 1. Public Reply
+            await message.reply(f"👋🏼 {message.author.mention} is available for a file. Added to the queue.", mention_author=True)
             
             # 2. DM Message
             queue_pos = len(work_queue)
             time_tag = get_time_tag()
-            
             dm_content = (
                 f"You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
-                f"**IMPORTANT REMINDERS:**\n"
-                f"- Audio project assignments are NOT preference-based. Audio projects will be drawn from the available queue and assigned by SWCs according to coverage and TAT needs.\n"
-                f"- Queue numbers are NOT a guarantee that files will be assigned chronologically.\n"
-                f"- Please be reminded of our Reminder on Eligibility for Audio Project Assignments: https://discord.com/channels/1391591320677519431/1391595956247728219/1450362680966774805"
+                f"**`IMPORTANT REMINDERS:`**\n"
+                f"- Audio project assignments are NOT preference-based.\n"
+                f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
+                f"- Please be reminded of our *Reminder on Eligibility for Audio Project Assignments.*"
             )
-
             try:
                 await message.author.send(dm_content)
             except:
                 pass
+            
+            # Log
+            log_embed = discord.Embed(title="User Available", description=f"{message.author.mention} joined the queue.", color=discord.Color.blue())
+            await send_log(message.guild, embed=log_embed)
 
     await bot.process_commands(message)
 
+
 # --- SLASH COMMANDS ---
+
+@bot.tree.command(name="setlogchannel", description="Set the channel where bot logs will be sent (SWC/Admin Only)")
+async def set_log_channel(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator and not is_swc(interaction):
+        await interaction.response.send_message("⛔ Admin/SWC Access Only.", ephemeral=True)
+        return
+    
+    # Save this channel ID for this guild
+    server_configs[str(interaction.guild_id)] = interaction.channel_id
+    save_config()
+    
+    await interaction.response.send_message(f"✅ Logging channel set to {interaction.channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="tattimer", description="Calculate TAT deadlines for a file")
+async def tattimer(interaction: discord.Interaction):
+    await interaction.response.send_message("Select a file type to calculate TAT:", view=TATView(), ephemeral=True)
 
 @bot.tree.command(name="available", description="Add yourself to the work queue")
 async def available(interaction: discord.Interaction):
-    if any(item['user'].id == interaction.user.id for item in work_queue):
+    # Cooldown Check (30 seconds)
+    last_used = available_cooldowns.get(interaction.user.id, 0)
+    now_ts = datetime.now().timestamp()
+    if now_ts - last_used < 30:
+        await interaction.response.send_message("⏳ Please wait a moment before using this again.", ephemeral=True)
+        return
+    
+    available_cooldowns[interaction.user.id] = now_ts
+
+    if any(item['user_id'] == interaction.user.id for item in work_queue):
         await interaction.response.send_message("You are already in the queue!", ephemeral=True)
         return
 
     work_queue.append({
-        'user': interaction.user,
+        'user_id': interaction.user.id,
+        'name': interaction.user.display_name,
         'time': int(datetime.now().timestamp())
     })
+    save_queue()
     
-    # Public Response
-    await interaction.response.send_message(f"{interaction.user.mention} is available for a file. Added to the queue.")
+    await interaction.response.send_message(f"👋🏼 {interaction.user.mention} is available for a file. Added to the queue.")
     
-    # DM Response
     queue_pos = len(work_queue)
     time_tag = get_time_tag()
-    
     dm_content = (
         f"You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
         f"**IMPORTANT REMINDERS:**\n"
-        f"- Audio project assignments are NOT preference-based. Audio projects will be drawn from the available queue and assigned by SWCs according to coverage and TAT needs.\n"
-        f"- Queue numbers are NOT a guarantee that files will be assigned chronologically.\n"
-        f"- Please be reminded of our Reminder on Eligibility for Audio Project Assignments: https://discord.com/channels/1391591320677519431/1391595956247728219/1450362680966774805"
+        f"- Audio project assignments are NOT preference-based.\n"
+        f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
+        f"- Please be reminded of our *Reminder on Eligibility for Audio Project Assignments.*"
     )
-
     try:
         await interaction.user.send(dm_content)
     except:
         pass
+    
+    log_embed = discord.Embed(title="User Available", description=f"{interaction.user.mention} joined via command.", color=discord.Color.blue())
+    await send_log(interaction.guild, embed=log_embed)
 
 @bot.tree.command(name="optout", description="Remove yourself from the queue")
 async def optout(interaction: discord.Interaction):
     global work_queue
     original_len = len(work_queue)
-    work_queue = [item for item in work_queue if item['user'].id != interaction.user.id]
+    work_queue = [item for item in work_queue if item['user_id'] != interaction.user.id]
+    save_queue()
     
     if len(work_queue) < original_len:
-        await interaction.response.send_message("You have been removed from the queue.", ephemeral=True)
+        await interaction.response.send_message("You have removed yourself from the queue.", ephemeral=True)
+        await send_log(interaction.guild, content=f"📤 {interaction.user.mention} opted out of queue.")
     else:
         await interaction.response.send_message("You were not in the queue.", ephemeral=True)
 
-@bot.tree.command(name="queue", description="Show the current waiting list (SWC Only)")
+@bot.tree.command(name="queue", description="Show the current waiting list (For SWC Only)")
 async def show_queue(interaction: discord.Interaction):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -268,58 +460,72 @@ async def show_queue(interaction: discord.Interaction):
         await interaction.response.send_message("The queue is empty.", ephemeral=True)
         return
 
-    # Build Embed
+    # Use Dynamic Timestamp for Title info in the Description
+    current_time_tag = get_time_tag()
     embed = discord.Embed(title="Current Work Queue", color=discord.Color.blue())
-    desc = ""
+    
+    desc = f"**As of:** {current_time_tag}\n\n"
     for idx, item in enumerate(work_queue, 1):
-        # Format: 1. @User - Queued at Time
-        desc += f"**{idx}.** {item['user'].mention} - Queued at <t:{item['time']}:F>\n"
+        member = interaction.guild.get_member(item['user_id'])
+        name_display = member.mention if member else item['name']
+        desc += f"**{idx}.** {name_display} | <t:{item['time']}:R>\n"
     
     embed.description = desc
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="remove", description="Remove a specific user from the queue (SWC Only)")
+@bot.tree.command(name="remove", description="Remove a specific user from the queue (For SWC Only)")
 async def remove_user(interaction: discord.Interaction, member: discord.Member):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
         return
 
     global work_queue
-    work_queue = [item for item in work_queue if item['user'].id != member.id]
-    await interaction.response.send_message(f"Removed {member.mention} from the queue.", ephemeral=False)
+    work_queue = [item for item in work_queue if item['user_id'] != member.id]
+    save_queue()
+    await interaction.response.send_message(f"✔️ Removed {member.mention} from the queue.", ephemeral=True)
+    await send_log(interaction.guild, content=f"❌ {member.mention} removed from queue by {interaction.user.mention}")
 
-@bot.tree.command(name="resetqueue", description="Clear the entire queue (SWC Only)")
+@bot.tree.command(name="resetqueue", description="Clear the entire queue (For SWC Only)")
 async def reset_queue(interaction: discord.Interaction):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
         return
 
     work_queue.clear()
+    save_queue()
     time_tag = get_time_tag()
     await interaction.response.send_message(f"🔄 The queue has been reset as of {time_tag}", ephemeral=False)
+    await send_log(interaction.guild, content=f"🔄 Queue reset by {interaction.user.mention}")
 
-@bot.tree.command(name="assign", description="Assign a file to a user (SWC Only)")
+@bot.tree.command(name="assign", description="Assign a file to a user (For SWC Only)")
 @app_commands.choices(file_type=FILE_CHOICES)
 async def assign(interaction: discord.Interaction, member: discord.Member, file_type: app_commands.Choice[str]):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
         return
 
-    # Defer interaction (loading state)
     await interaction.response.defer(ephemeral=True)
-
-    # Perform Logic
-    await assign_logic(member, file_type.value, interaction.channel)
-
-    # Confirm to SWC (Ephemeral)
+    await assign_logic(member, file_type.value, interaction.channel, interaction.user)
     await interaction.followup.send("Assignment processed.", ephemeral=True)
 
 @bot.tree.command(name="askfileupdate", description="Ask a user for an update on their file")
 async def ask_update(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"{user.mention}, please provide an update on your file.")
 
-# --- FORM COMMANDS ---
+@bot.tree.command(name="reassign_notif", description="Notify editor of reassignment (For SWC Only)")
+async def reassign_notif(interaction: discord.Interaction, member: discord.Member):
+    if not is_swc(interaction):
+        await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
+        return
 
+    try:
+        await member.send(f"⚠️ {member.mention}, your file has been REASSIGNED due to idleness.")
+        await interaction.response.send_message(f"✅ Notification sent to {member.mention}.", ephemeral=True)
+        await send_log(interaction.guild, content=f"⚠️ Reassignment notice sent to {member.mention} by {interaction.user.mention}")
+    except discord.Forbidden:
+        await interaction.response.send_message(f"❌ Could not DM {member.mention}.", ephemeral=True)
+
+# --- FORM COMMANDS ---
 @bot.tree.command(name="plannedavailability", description="Submit planned availability change")
 async def planned(interaction: discord.Interaction):
     await interaction.response.send_modal(AvailabilityModal(title_text="Planned Availability"))
@@ -328,23 +534,21 @@ async def planned(interaction: discord.Interaction):
 async def unplanned(interaction: discord.Interaction):
     await interaction.response.send_modal(AvailabilityModal(title_text="Unplanned Availability"))
 
-@bot.tree.command(name="tatdelay", description="Report a TAT delay")
+@bot.tree.command(name="tatdelay", description="Ask permission to exceed TAT")
 async def tat_delay(interaction: discord.Interaction):
-    await interaction.response.send_modal(TATDelayModal())
+    await interaction.response.send_modal(PermissionTATModal())
 
 @bot.tree.command(name="fileupdate", description="Provide a file update")
 async def file_update(interaction: discord.Interaction):
     await interaction.response.send_modal(FileUpdateModal())
 
 # --- CONTEXT MENU COMMANDS (RIGHT CLICK) ---
-
 @bot.tree.context_menu(name="Assign a File")
 async def context_assign(interaction: discord.Interaction, member: discord.Member):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
         return
     
-    # Send a view with a dropdown menu, only visible to SWC
     await interaction.response.send_message(
         f"Select file type for {member.mention}:", 
         view=AssignView(member, interaction.channel), 
@@ -358,9 +562,14 @@ async def context_remove(interaction: discord.Interaction, member: discord.Membe
         return
 
     global work_queue
-    work_queue = [item for item in work_queue if item['user'].id != member.id]
-    await interaction.response.send_message(f"Removed {member.mention} from the queue.", ephemeral=False)
+    work_queue = [item for item in work_queue if item['user_id'] != member.id]
+    save_queue()
+    await interaction.response.send_message(f"✔️ Removed {member.mention} from the queue.", ephemeral=True)
+    await send_log(interaction.guild, content=f"❌ {member.mention} removed from queue (Context Menu) by {interaction.user.mention}")
 
+@bot.tree.context_menu(name="Ask for Update")
+async def context_ask_update(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.send_message(f"🔍 {member.mention}, please provide an update on your file.")
 
 # --- EMOJI LISTENER (LEGACY) ---
 @bot.event
@@ -373,6 +582,7 @@ async def on_raw_reaction_add(payload):
         reactor = guild.get_member(payload.user_id)
         if not reactor: return
         
+        # Check by Role Name
         user_role_names = [role.name for role in reactor.roles]
         if SWC_ROLE_NAME not in user_role_names: return
 
@@ -385,7 +595,7 @@ async def on_raw_reaction_add(payload):
         if editor.bot: return
 
         file_type = EMOJI_TO_FILE[payload.emoji.name]
-        await assign_logic(editor, file_type, channel)
+        await assign_logic(editor, file_type, channel, reactor)
         await message.add_reaction("💼")
 
 # START
