@@ -24,7 +24,9 @@ def keep_alive():
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("DISCORD_TOKEN") 
-SWC_ROLE_NAME = "Senior Workflow Coordinator" 
+SWC_ROLE_NAME = "Senior Workflow Coordinator"
+# Added both IDs (Official and Test)
+SWC_ROLE_IDS = [1391602377672491198, 1450395825208299582]
 
 EMOJI_TO_FILE = {
     "QB": "QUARTR BATCH FILE",
@@ -51,14 +53,11 @@ CONFIG_FILE = "config.json"
 
 # Global Variables
 work_queue = []
-server_configs = {} # Stores log channels per server: {"guild_id": channel_id}
-available_cooldowns = {} # Stores last usage: {user_id: timestamp}
+server_configs = {} 
+available_cooldowns = {} 
 
 def load_data():
-    """Loads queue and config from JSON files on startup."""
     global work_queue, server_configs
-    
-    # Load Queue
     if os.path.exists(QUEUE_FILE):
         try:
             with open(QUEUE_FILE, "r") as f:
@@ -68,18 +67,14 @@ def load_data():
             print(f"Error loading queue: {e}")
             work_queue = []
     
-    # Load Configs
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
                 server_configs = json.load(f)
-                print("Loaded server configurations.")
         except Exception as e:
-            print(f"Error loading config: {e}")
             server_configs = {}
 
 def save_queue():
-    """Saves the current queue to JSON file."""
     try:
         with open(QUEUE_FILE, "w") as f:
             json.dump(work_queue, f)
@@ -87,7 +82,6 @@ def save_queue():
         print(f"Failed to save queue: {e}")
 
 def save_config():
-    """Saves server configs to JSON file."""
     try:
         with open(CONFIG_FILE, "w") as f:
             json.dump(server_configs, f)
@@ -96,8 +90,13 @@ def save_config():
 
 # --- HELPER FUNCTIONS ---
 def is_swc(interaction: discord.Interaction):
-    # Check by Role Name
     if not isinstance(interaction.user, discord.Member): return False
+    
+    # 1. Check against the explicit Role IDs provided
+    if any(role.id in SWC_ROLE_IDS for role in interaction.user.roles):
+        return True
+        
+    # 2. Check Name as fallback
     user_role_names = [role.name for role in interaction.user.roles]
     return SWC_ROLE_NAME in user_role_names
 
@@ -106,9 +105,7 @@ def get_time_tag():
     return f"<t:{current_unix_time}:F>"
 
 async def send_log(guild, content=None, embed=None):
-    """Sends a log message to the configured channel for that guild."""
     if not guild: return
-    
     guild_id_str = str(guild.id)
     if guild_id_str in server_configs:
         channel_id = server_configs[guild_id_str]
@@ -123,7 +120,6 @@ async def send_log(guild, content=None, embed=None):
 async def assign_logic(user, file_type, channel, assigner):
     time_tag = get_time_tag()
     
-    # 1. Remove from Queue if present
     global work_queue
     in_queue = False
     if any(item['user_id'] == user.id for item in work_queue):
@@ -131,7 +127,6 @@ async def assign_logic(user, file_type, channel, assigner):
         save_queue()
         in_queue = True
 
-    # 2. DM Content
     dm_content = (
         f"# Hello {user.mention}! You have been assigned a **{file_type}** at {time_tag}.\n\n" 
         f"## Please start on them immediately.\n\n"
@@ -140,19 +135,12 @@ async def assign_logic(user, file_type, channel, assigner):
         f"- If you will take longer on a file, keep the SWCs properly appraised. Include your reasons and estimated TAT."
     )
 
-    # 3. Send Messages (Smart Logic)
     try:
-        # Try to send DM
         await user.send(dm_content)
-        
-        # IF DM SUCCEEDS, send the normal public message:
         await channel.send(f"💼 {user.mention} has been assigned a **{file_type}** at {time_tag}.")
-        
     except discord.Forbidden:
-        # IF DM FAILS (Blocked), send ONE combined public message:
         await channel.send(f"⚠️ {user.mention} (I cannot DM you) — You have been assigned a **{file_type}** at {time_tag}. Please check your privacy settings.")
 
-    # 4. Log Action
     log_embed = discord.Embed(title="File Assigned", color=discord.Color.green())
     log_embed.add_field(name="Editor", value=f"{user.display_name} ({user.id})", inline=True)
     log_embed.add_field(name="File Type", value=file_type, inline=True)
@@ -171,24 +159,17 @@ class TATModal(ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         time_str = self.audio_len.value.strip()
-        
-        # Parse Time
         try:
             parts = list(map(int, time_str.split(':')))
-            if len(parts) == 3:
-                h, m, s = parts
-            elif len(parts) == 2:
-                h, m, s = 0, parts[0], parts[1]
-            else:
-                raise ValueError
-            
+            if len(parts) == 3: h, m, s = parts
+            elif len(parts) == 2: h, m, s = 0, parts[0], parts[1]
+            else: raise ValueError
             total_seconds = h * 3600 + m * 60 + s
             ah_decimal = total_seconds / 3600
         except:
-            await interaction.response.send_message("❌ Invalid format. Please use HH:MM:SS (e.g., 01:00:00)", ephemeral=True)
+            await interaction.response.send_message("❌ Invalid format. Please use HH:MM:SS", ephemeral=True)
             return
 
-        # Calculate TATs
         fr_tat = 0
         sv_tat = 0
         overall_tat = 0
@@ -202,7 +183,6 @@ class TATModal(ui.Modal):
             sv_tat = total_seconds * 0.3 
             overall_tat = total_seconds * 3.5 
         elif "HP" in self.file_type:
-            # HP is fixed: 1hr 30mins overall
             overall_tat = 90 * 60 
         
         def fmt(seconds):
@@ -219,13 +199,11 @@ class TATModal(ui.Modal):
             f"**`OVERALL TAT:`** {fmt(overall_tat)}\n\n"
             f"You can also use this Workflow Logger for TATs: https://fdeditor-workflowtimer.vercel.app/"
         )
-        
         await interaction.response.send_message(msg, ephemeral=True)
 
 class TATView(ui.View):
     def __init__(self):
         super().__init__()
-
     @discord.ui.select(
         placeholder="Select File Type to Calculate...",
         options=[
@@ -235,16 +213,13 @@ class TATView(ui.View):
         ]
     )
     async def select_callback(self, interaction: discord.Interaction, select: ui.Select):
-        file_cat = select.values[0]
-        await interaction.response.send_modal(TATModal(file_cat))
-
+        await interaction.response.send_modal(TATModal(select.values[0]))
 
 # --- MODALS (FORMS) ---
 
 class AvailabilityModal(ui.Modal):
     def __init__(self, title_text):
         super().__init__(title=title_text)
-
     name = ui.TextInput(label="Name", placeholder="Your full name")
     time_affected = ui.TextInput(label="Date and Time Affected", placeholder="e.g. Dec 25, 4pm-9am")
     change_type = ui.TextInput(label="Change Requested", placeholder="Available --> Unavailable OR Unavailable --> Available")
@@ -260,7 +235,6 @@ class AvailabilityModal(ui.Modal):
             f"**`REASON:`** {self.reason.value}"
         )
         await interaction.response.send_message(msg)
-        # Log it
         log_embed = discord.Embed(title=f"{self.title} Request", description=self.reason.value, color=discord.Color.orange())
         log_embed.set_author(name=interaction.user.display_name)
         await send_log(interaction.guild, content=msg)
@@ -274,7 +248,7 @@ class PermissionTATModal(ui.Modal, title="Permission to exceed TAT"):
             f"## Permission to exceed TAT\n"
             f"**`EDITOR:`** {interaction.user.mention}\n"
             f"**`FILE NAME:`** {self.file_name.value}\n"
-            f"**REASON:** {self.reason.value}"
+            f"**`REASON:`** {self.reason.value}"
         )
         await interaction.response.send_message(msg)
         await send_log(interaction.guild, content=msg)
@@ -294,13 +268,11 @@ class FileUpdateModal(ui.Modal, title="File Update"):
         )
         await interaction.response.send_message(msg)
 
-# --- VIEWS (For Right Click Assignment Menu) ---
 class AssignView(ui.View):
     def __init__(self, member: discord.Member, channel):
         super().__init__()
         self.member = member
         self.channel = channel
-
     @discord.ui.select(
         placeholder="Select File Type to Assign...",
         options=[
@@ -326,7 +298,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    load_data() # Load JSONs
+    load_data()
     print(f'Logged in as {bot.user}')
     try:
         synced = await bot.tree.sync()
@@ -338,30 +310,24 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot: return
 
-    # --- "Available" Listener Logic ---
     if message.content.strip().lower() == "available":
-        # Check if already in queue
         if any(item['user_id'] == message.author.id for item in work_queue):
-            # User IS in queue -> JUST REACT (No reply)
             await message.add_reaction("✍🏼") 
         else:
-            # User NOT in queue -> ADD & REPLY
             work_queue.append({
                 'user_id': message.author.id,
-                'name': message.author.display_name, # Fallback name
+                'name': message.author.display_name,
                 'time': int(datetime.now().timestamp())
             })
             save_queue()
             
-            # 1. Public Reply
             await message.reply(f"👋🏼 {message.author.mention} is available for a file. Added to the queue.", mention_author=True)
             
-            # 2. DM Message
             queue_pos = len(work_queue)
             time_tag = get_time_tag()
             dm_content = (
                 f"You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
-                f"**`IMPORTANT REMINDERS:`**\n"
+                f"**IMPORTANT REMINDERS:**\n"
                 f"- Audio project assignments are NOT preference-based.\n"
                 f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
                 f"- Please be reminded of our *Reminder on Eligibility for Audio Project Assignments.*"
@@ -371,7 +337,6 @@ async def on_message(message):
             except:
                 pass
             
-            # Log
             log_embed = discord.Embed(title="User Available", description=f"{message.author.mention} joined the queue.", color=discord.Color.blue())
             await send_log(message.guild, embed=log_embed)
 
@@ -380,16 +345,15 @@ async def on_message(message):
 
 # --- SLASH COMMANDS ---
 
-@bot.tree.command(name="setlogchannel", description="Set the channel where bot logs will be sent (SWC/Admin Only)")
+@bot.tree.command(name="setlogchannel", description="Set the channel where bot logs will be sent")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def set_log_channel(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator and not is_swc(interaction):
-        await interaction.response.send_message("⛔ Admin/SWC Access Only.", ephemeral=True)
+    if not is_swc(interaction):
+        await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
         return
     
-    # Save this channel ID for this guild
     server_configs[str(interaction.guild_id)] = interaction.channel_id
     save_config()
-    
     await interaction.response.send_message(f"✅ Logging channel set to {interaction.channel.mention}", ephemeral=True)
 
 @bot.tree.command(name="tattimer", description="Calculate TAT deadlines for a file")
@@ -398,7 +362,6 @@ async def tattimer(interaction: discord.Interaction):
 
 @bot.tree.command(name="available", description="Add yourself to the work queue")
 async def available(interaction: discord.Interaction):
-    # Cooldown Check (30 seconds)
     last_used = available_cooldowns.get(interaction.user.id, 0)
     now_ts = datetime.now().timestamp()
     if now_ts - last_used < 30:
@@ -450,7 +413,8 @@ async def optout(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("You were not in the queue.", ephemeral=True)
 
-@bot.tree.command(name="queue", description="Show the current waiting list (For SWC Only)")
+@bot.tree.command(name="queue", description="Show the current waiting list")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def show_queue(interaction: discord.Interaction):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -460,7 +424,6 @@ async def show_queue(interaction: discord.Interaction):
         await interaction.response.send_message("The queue is empty.", ephemeral=True)
         return
 
-    # Use Dynamic Timestamp for Title info in the Description
     current_time_tag = get_time_tag()
     embed = discord.Embed(title="Current Work Queue", color=discord.Color.blue())
     
@@ -473,7 +436,8 @@ async def show_queue(interaction: discord.Interaction):
     embed.description = desc
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="remove", description="Remove a specific user from the queue (For SWC Only)")
+@bot.tree.command(name="remove", description="Remove a specific user from the queue")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def remove_user(interaction: discord.Interaction, member: discord.Member):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -485,7 +449,8 @@ async def remove_user(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.send_message(f"✔️ Removed {member.mention} from the queue.", ephemeral=True)
     await send_log(interaction.guild, content=f"❌ {member.mention} removed from queue by {interaction.user.mention}")
 
-@bot.tree.command(name="resetqueue", description="Clear the entire queue (For SWC Only)")
+@bot.tree.command(name="resetqueue", description="Clear the entire queue")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def reset_queue(interaction: discord.Interaction):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -497,8 +462,9 @@ async def reset_queue(interaction: discord.Interaction):
     await interaction.response.send_message(f"🔄 The queue has been reset as of {time_tag}", ephemeral=False)
     await send_log(interaction.guild, content=f"🔄 Queue reset by {interaction.user.mention}")
 
-@bot.tree.command(name="assign", description="Assign a file to a user (For SWC Only)")
+@bot.tree.command(name="assign", description="Assign a file to a user")
 @app_commands.choices(file_type=FILE_CHOICES)
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def assign(interaction: discord.Interaction, member: discord.Member, file_type: app_commands.Choice[str]):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -509,10 +475,15 @@ async def assign(interaction: discord.Interaction, member: discord.Member, file_
     await interaction.followup.send("Assignment processed.", ephemeral=True)
 
 @bot.tree.command(name="askfileupdate", description="Ask a user for an update on their file")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def ask_update(interaction: discord.Interaction, user: discord.Member):
-    await interaction.response.send_message(f"{user.mention}, please provide an update on your file.")
+    if not is_swc(interaction):
+        await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"🔍 {user.mention}, please provide an update on your file.")
 
-@bot.tree.command(name="reassign_notif", description="Notify editor of reassignment (For SWC Only)")
+@bot.tree.command(name="reassign_notif", description="Notify editor of reassignment")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def reassign_notif(interaction: discord.Interaction, member: discord.Member):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -544,6 +515,7 @@ async def file_update(interaction: discord.Interaction):
 
 # --- CONTEXT MENU COMMANDS (RIGHT CLICK) ---
 @bot.tree.context_menu(name="Assign a File")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def context_assign(interaction: discord.Interaction, member: discord.Member):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -556,6 +528,7 @@ async def context_assign(interaction: discord.Interaction, member: discord.Membe
     )
 
 @bot.tree.context_menu(name="Remove from Queue")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def context_remove(interaction: discord.Interaction, member: discord.Member):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
@@ -568,7 +541,11 @@ async def context_remove(interaction: discord.Interaction, member: discord.Membe
     await send_log(interaction.guild, content=f"❌ {member.mention} removed from queue (Context Menu) by {interaction.user.mention}")
 
 @bot.tree.context_menu(name="Ask for Update")
+@app_commands.default_permissions(administrator=True) # Invisible to normal users
 async def context_ask_update(interaction: discord.Interaction, member: discord.Member):
+    if not is_swc(interaction):
+        await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
+        return
     await interaction.response.send_message(f"🔍 {member.mention}, please provide an update on your file.")
 
 # --- EMOJI LISTENER (LEGACY) ---
@@ -582,9 +559,14 @@ async def on_raw_reaction_add(payload):
         reactor = guild.get_member(payload.user_id)
         if not reactor: return
         
-        # Check by Role Name
-        user_role_names = [role.name for role in reactor.roles]
-        if SWC_ROLE_NAME not in user_role_names: return
+        # 1. Check ID
+        if any(role.id in SWC_ROLE_IDS for role in reactor.roles):
+            is_swc_reactor = True
+        else:
+            # 2. Check Name (Fallback)
+            is_swc_reactor = SWC_ROLE_NAME in [role.name for role in reactor.roles]
+
+        if not is_swc_reactor: return
 
         try:
             channel = bot.get_channel(payload.channel_id)
