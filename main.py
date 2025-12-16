@@ -31,10 +31,6 @@ EMOJI_TO_FILE = {
     "HP": "HP FILE",
     "AB": "AIERA BATCH FILE",
     "AL": "AIERA LIVE FILE",
-    "🇶": "QUARTR BATCH FILE", 
-    "🇱": "QUARTR LIVE FILE",  
-    "🇭": "HP FILE",          
-    "🇦": "AIERA BATCH FILE", 
 }
 
 intents = discord.Intents.default()
