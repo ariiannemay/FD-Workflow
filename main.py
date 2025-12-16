@@ -432,7 +432,7 @@ async def show_queue(interaction: discord.Interaction):
         desc += f"**{idx}.** {name_display} | <t:{item['time']}:R>\n"
     
     embed.description = desc
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="remove", description="Remove a specific user from the queue")
 @app_commands.default_permissions(administrator=True) # Invisible to normal users
