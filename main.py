@@ -368,10 +368,8 @@ class RevertView(ui.View):
         await interaction.response.defer()
         await self.send_dm(interaction, "APPROVED")
         
-        # Modify content and buttons
         new_content = self.original_msg_content.replace("## Revert Request", "## Revert Request [APPROVED]")
         
-        # Clear existing items and add only the "Reverted" button
         self.clear_items()
         self.add_item(ui.Button(label="Reverted", style=discord.ButtonStyle.green, disabled=True))
         
@@ -387,7 +385,6 @@ class RevertView(ui.View):
         
         new_content = self.original_msg_content.replace("## Revert Request", "## Revert Request [DENIED]")
         
-        # Clear existing items and add only the "Denied" button
         self.clear_items()
         self.add_item(ui.Button(label="Denied", style=discord.ButtonStyle.red, disabled=True))
             
@@ -453,7 +450,6 @@ class RevertRequestModal(ui.Modal, title="Revert Request"):
             f"- **`NOTES:`** {self.notes.value if self.notes.value else 'N/A'}"
         )
         
-        # FIXED: Send to current channel instead of Log Channel
         await interaction.channel.send(content=msg, view=RevertView(interaction.user, msg))
         await interaction.response.send_message("✅ Revert Request posted in this channel.", ephemeral=True)
 
@@ -480,7 +476,6 @@ class ReworkReportModal(ui.Modal, title="Rework Report"):
             f"- **`INVALID CHANGES:`** {self.inv_changes.value}"
         )
 
-        # FIXED: Send to current channel instead of Log Channel
         await interaction.channel.send(content=msg, view=ReworkView(interaction.user, msg))
         await interaction.response.send_message("✅ Rework Report posted in this channel.", ephemeral=True)
 
@@ -530,7 +525,7 @@ async def on_message(message):
             queue_pos = len(work_queue)
             time_tag = get_time_tag()
             dm_content = (
-                f"# Hello {message.author.mention}!\n
+                f"# Hello {message.author.mention}!\n"
                 f"# You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
                 f"**IMPORTANT REMINDERS:**\n"
                 f"- Audio project assignments are NOT preference-based.\n"
@@ -589,7 +584,7 @@ async def available(interaction: discord.Interaction):
     queue_pos = len(work_queue)
     time_tag = get_time_tag()
     dm_content = (
-        f"# Hello {message.author.mention}!\n
+        f"# Hello {interaction.user.mention}!\n"
         f"# You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
         f"**IMPORTANT REMINDERS:**\n"
         f"- Audio project assignments are NOT preference-based.\n"
@@ -694,7 +689,7 @@ async def ask_update(interaction: discord.Interaction, user: discord.Member):
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
         return
-    await interaction.response.send_message(f"🛎️ {user.mention}, please provide an update on your file.")
+    await interaction.response.send_message(f"🔍 {user.mention}, please provide an update on your file.")
 
 @bot.tree.command(name="reassign_notif", description="Notify editor of reassignment")
 @app_commands.default_permissions(administrator=True)
@@ -769,7 +764,7 @@ async def context_ask_update(interaction: discord.Interaction, member: discord.M
     if not is_swc(interaction):
         await interaction.response.send_message("⛔ SWC Access Only.", ephemeral=True)
         return
-    await interaction.response.send_message(f"🛎️ {member.mention}, please provide an update on your file.")
+    await interaction.response.send_message(f"🔍 {member.mention}, please provide an update on your file.")
 
 # --- NEW CONTEXT MENU: ADD TO QUEUE ---
 @bot.tree.context_menu(name="Add to Queue")
@@ -797,10 +792,9 @@ async def context_add_queue(interaction: discord.Interaction, member: discord.Me
     queue_pos = len(work_queue)
     time_tag = get_time_tag()
     dm_content = (
-        f"# Hello {message.author.mention}!\n
-        f"# You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
+        f"You are added to the [Queue Status](https://discord.com/channels/{interaction.guild_id}). As of {time_tag}, you are at queue #{queue_pos}.\n\n"
         f"**IMPORTANT REMINDERS:**\n"
-        f"- Audio project assignments are **NOT preference-based.**\n"
+        f"- Audio project assignments are NOT preference-based.\n"
         f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
         f"- Please be reminded of our *[Reminder on Eligibility for Audio Project Assignments](https://discord.com/channels/1391591320677519431/1391595956247728219/1450362680966774805).*"
     )
