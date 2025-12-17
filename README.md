@@ -67,7 +67,7 @@ A specialized Discord bot designed to streamline operations for remote editing t
     Open `main.py` and update the `SWC_ROLE_IDS` list with the Role IDs of your coordinators:
     ```python
     # main.py
-    SWC_ROLE_IDS = [##################, ####################]
+    SWC_ROLE_IDS = [123456789012345678, 987654321098765432]
     ```
 
 5.  **Run the Bot:**
@@ -88,6 +88,7 @@ A specialized Discord bot designed to streamline operations for remote editing t
 | `/tatdelay` | Form to request a deadline extension. | Public Log |
 | `/fileupdate` | Form to submit file status (e.g., "Uploading"). | Public Log |
 | `/plannedavailability` | Submit scheduled leave/absence. | Public Log |
+| `/unplannedavailability`| Submit emergency absence report. | Public Log |
 
 ### ⛔ Admin Commands (Coordinator Only)
 *These commands are invisible to standard users.*
@@ -99,6 +100,7 @@ A specialized Discord bot designed to streamline operations for remote editing t
 | `/remove` | Forcefully remove a user from the queue. |
 | `/resetqueue` | Wipe the entire list (End of Shift). |
 | `/reassign_notif` | Send a disciplinary reassignment DM. |
+| `/askfileupdate` | Publicly ping an editor for a status report. |
 | `/setlogchannel` | Configure where logs are sent. |
 
 ---
@@ -109,7 +111,7 @@ A specialized Discord bot designed to streamline operations for remote editing t
 > Coordinator uses `/assign` or Right-Click Context Menu $\rightarrow$ Bot calculates timestamps $\rightarrow$ Bot DMs Editor $\rightarrow$ Bot updates public log.
 
 **2. TAT Calculator:**
-> User inputs `01:30:00` audio length $\rightarrow$ Bot applies specific multipliers based on file type (e.g., 1.5x, 0.3x) $\rightarrow$ Returns exact deadline timestamps.
+> User inputs `01:30:00` audio length $\rightarrow$ Bot applies specific multipliers based on file type (e.g., Client A vs. Client B) $\rightarrow$ Returns exact deadline timestamps.
 
 ---
 
