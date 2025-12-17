@@ -67,7 +67,7 @@ A specialized Discord bot designed to streamline operations for remote editing t
     Open `main.py` and update the `SWC_ROLE_IDS` list with the Role IDs of your coordinators:
     ```python
     # main.py
-    SWC_ROLE_IDS = [123456789012345678, 987654321098765432]
+    SWC_ROLE_IDS = [##################, ####################]
     ```
 
 5.  **Run the Bot:**
