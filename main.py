@@ -594,7 +594,7 @@ async def on_message(message):
         time_tag = get_time_tag()
         dm_content = (
             f"# Hello {message.author.mention}!\n"
-            f"# You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
+            f"# You are added to the queue at {time_tag}.\n\n"
             f"**IMPORTANT REMINDERS:**\n"
             f"- Audio project assignments are NOT preference-based.\n"
             f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
@@ -686,7 +686,7 @@ async def available(interaction: discord.Interaction, time_block: app_commands.C
     time_tag = get_time_tag()
     dm_content = (
         f"# Hello {interaction.user.mention}!\n"
-        f"# You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
+        f"# You are added to the queue at {time_tag}.\n\n"
         f"**IMPORTANT REMINDERS:**\n"
         f"- Audio project assignments are NOT preference-based.\n"
         f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
