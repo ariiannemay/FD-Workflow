@@ -453,6 +453,52 @@ class ReworkView(ui.View):
         await interaction.message.edit(content=new_content, view=self)
         await interaction.followup.send("📝 User notified (Noted).", ephemeral=True)
 
+# --- HELP SYSTEM ---
+class HelpSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Editor Commands", description="General commands for editors", emoji="📝"),
+            discord.SelectOption(label="SWC Commands", description="Admin/SWC Only commands", emoji="🛡️"),
+            discord.SelectOption(label="Forms & Requests", description="Various submission forms", emoji="📋"),
+        ]
+        super().__init__(placeholder="Select a category for help...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="Bot Help Menu", color=discord.Color.blue())
+        
+        if self.values[0] == "Editor Commands":
+            embed.description = "**General Commands**"
+            embed.add_field(name="/available", value="Add yourself to the work queue with a time block.", inline=False)
+            embed.add_field(name="/optout", value="Remove yourself from the queue.", inline=False)
+            embed.add_field(name="/tattimer", value="Calculate TAT deadlines for a specific file length.", inline=False)
+            embed.add_field(name="Text Command: 'available'", value="Type `available` in chat to join queue (Legacy).", inline=False)
+        
+        elif self.values[0] == "SWC Commands":
+            embed.description = "**SWC / Admin Commands**"
+            embed.add_field(name="/assign", value="Assign a file to a user (starts TAT timer).", inline=False)
+            embed.add_field(name="/queue", value="View the current waiting list.", inline=False)
+            embed.add_field(name="/remove", value="Force remove a user from the queue.", inline=False)
+            embed.add_field(name="/resetqueue", value="Clear the entire queue.", inline=False)
+            embed.add_field(name="/askfileupdate", value="Ping a user asking for a status update.", inline=False)
+            embed.add_field(name="/setlogchannel", value="Set where bot logs are sent.", inline=False)
+            embed.add_field(name="Context Menus", value="Right Click User > Apps > Assign, Remove, etc.", inline=False)
+
+        elif self.values[0] == "Forms & Requests":
+            embed.description = "**Forms & Request Commands**"
+            embed.add_field(name="/plannedavailability", value="Submit planned schedule changes.", inline=False)
+            embed.add_field(name="/unplannedavailability", value="Submit unplanned schedule changes.", inline=False)
+            embed.add_field(name="/tatdelay", value="Submit a TAT Delay Notice.", inline=False)
+            embed.add_field(name="/fileupdate", value="Submit a general file update/status.", inline=False)
+            embed.add_field(name="/revertrequest", value="Request a file revert (Requires SWC approval).", inline=False)
+            embed.add_field(name="/reworkreport", value="Submit a rework report (Requires SWC validation).", inline=False)
+
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+class HelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(HelpSelect())
+
 # --- BOT SETUP ---
 class MyBot(commands.Bot):
     async def setup_hook(self):
@@ -463,12 +509,25 @@ class MyBot(commands.Bot):
 intents = discord.Intents.default()
 intents.members = True # Ensure this is ON in Dev Portal
 intents.message_content = True
-bot = MyBot(command_prefix="fd!", intents=intents)
+
+# Disable default help command so we can make our own
+bot = MyBot(command_prefix="fd!", intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
     load_data()
     print(f'Logged in as {bot.user}')
+
+# --- HELP COMMANDS ---
+@bot.tree.command(name="help", description="Show the help menu")
+async def slash_help(interaction: discord.Interaction):
+    embed = discord.Embed(title="Bot Help Menu", description="Select a category below to view commands.", color=discord.Color.blue())
+    await interaction.response.send_message(embed=embed, view=HelpView(), ephemeral=True)
+
+@bot.command(name="help")
+async def text_help(ctx):
+    embed = discord.Embed(title="Bot Help Menu", description="Select a category below to view commands.", color=discord.Color.blue())
+    await ctx.send(embed=embed, view=HelpView())
 
 @bot.command(name="sync")
 async def sync(ctx, option: str = None):
@@ -483,7 +542,7 @@ async def sync(ctx, option: str = None):
             # This wipes commands to fix duplicates
             bot.tree.clear_commands(guild=ctx.guild)
             await bot.tree.sync(guild=ctx.guild)
-            await msg.edit(content="✅ Local guild commands cleared. Now run `!sync` to load the fresh code.")
+            await msg.edit(content="✅ Local guild commands cleared. Now run `fd!sync` to load the fresh code.")
         else:
             # THIS IS THE FIX for "Synced 0"
             # It copies the global commands (defined in code) to the current guild
@@ -743,7 +802,7 @@ async def assign(interaction: discord.Interaction, member: discord.Member, file_
     
     await interaction.response.defer(ephemeral=False)
     await assign_logic(member, file_type.value, interaction.channel, interaction.user, file_name, audio_length)
-    await interaction.followup.send("Assignment processed.", ephemeral=True)
+    await interaction.followup.send("Assignment processed.", ephemeral=False)
 
 @bot.tree.command(name="askfileupdate", description="Ask a user for an update on their file")
 @app_commands.default_permissions(administrator=True)
