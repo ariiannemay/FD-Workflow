@@ -28,6 +28,21 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 SWC_ROLE_NAME = "Senior Workflow Coordinator"
 SWC_ROLE_IDS = [1391602377672491198, 1450395825208299582]
 
+# EMOJI LISTENER MAPPING
+# Keys = The NAME of the emoji (e.g. "QB" for a custom emoji :QB:)
+# For standard letters, use the actual emoji character (e.g. "🇶")
+EMOJI_MAP = {
+    "AL": "AIERA LIVE FILE",
+    "AB": "AIERA BATCH FILE",
+    "HP": "HP FILE",
+    "QL": "QUARTR LIVE FILE",
+    "QB": "QUARTR BATCH FILE",
+    "QUARTR": "QUARTR LIVE FILE", # Default for Q
+    "AIERA": "AIERA LIVE FILE",   # Default for A
+    "🇶": "QUARTR LIVE FILE", # Regional Indicator Q
+    "🇦": "AIERA LIVE FILE"    # Regional Indicator A
+}
+
 FILE_CHOICES = [
     app_commands.Choice(name="Aiera Live", value="AIERA LIVE FILE"),
     app_commands.Choice(name="Aiera Batch", value="AIERA BATCH FILE"),
@@ -82,12 +97,20 @@ def save_config():
         print(f"Failed to save config: {e}")
 
 # --- HELPER FUNCTIONS ---
-def is_swc(interaction: discord.Interaction):
-    if not isinstance(interaction.user, discord.Member): return False
-    if any(role.id in SWC_ROLE_IDS for role in interaction.user.roles):
+def check_swc_role(member: discord.Member) -> bool:
+    """Unified check for SWC role on a Member object"""
+    if not isinstance(member, discord.Member): return False
+    # Check by ID
+    if any(role.id in SWC_ROLE_IDS for role in member.roles):
         return True
-    user_role_names = [role.name for role in interaction.user.roles]
+    # Check by Name
+    user_role_names = [role.name for role in member.roles]
     return SWC_ROLE_NAME in user_role_names
+
+def is_swc(interaction: discord.Interaction):
+    """Decorator helper for Slash Commands"""
+    if not isinstance(interaction.user, discord.Member): return False
+    return check_swc_role(interaction.user)
 
 def get_time_tag():
     current_unix_time = int(datetime.now().timestamp())
@@ -482,6 +505,7 @@ class HelpSelect(discord.ui.Select):
             embed.add_field(name="/askfileupdate", value="Ping a user asking for a status update.", inline=False)
             embed.add_field(name="/setlogchannel", value="Set where bot logs are sent.", inline=False)
             embed.add_field(name="Context Menus", value="Right Click User > Apps > Assign, Remove, etc.", inline=False)
+            embed.add_field(name="Emoji Reactions", value="React with custom emojis (:QB:, :AL:, etc) to instantly assign files.", inline=False)
 
         elif self.values[0] == "Forms & Requests":
             embed.description = "**Forms & Request Commands**"
@@ -517,6 +541,43 @@ bot = MyBot(command_prefix="fd!", intents=intents, help_command=None)
 async def on_ready():
     load_data()
     print(f'Logged in as {bot.user}')
+
+# --- REACTION LISTENER ---
+@bot.event
+async def on_raw_reaction_add(payload):
+    # Ignore bot's own reactions
+    if payload.user_id == bot.user.id: return
+    # Must be in a server (Guild)
+    if not payload.guild_id: return
+
+    # Check if the emoji name is in our mapping
+    emoji_name = payload.emoji.name
+    if emoji_name not in EMOJI_MAP: return
+
+    guild = bot.get_guild(payload.guild_id)
+    # Get the member object of the person who reacted (The SWC)
+    member = payload.member or guild.get_member(payload.user_id)
+    
+    # Verify permission
+    if not check_swc_role(member):
+        return # They are not an SWC, ignore reaction
+
+    channel = bot.get_channel(payload.channel_id)
+    try:
+        # Fetch the message that was reacted to
+        message = await channel.fetch_message(payload.message_id)
+    except:
+        return
+
+    # Ignore if they react to a bot message
+    if message.author.bot: return 
+
+    # Identify the file type from the emoji
+    file_type = EMOJI_MAP[emoji_name]
+    
+    # Run assignment logic
+    # We pass 'member' (the reactor) as the 'assigner'
+    await assign_logic(message.author, file_type, channel, member, file_name=None, audio_length=None)
 
 # --- HELP COMMANDS ---
 @bot.tree.command(name="help", description="Show the help menu")
@@ -588,13 +649,13 @@ async def on_message(message):
         work_queue.append(entry)
         save_queue()
         
-        await message.reply(f"👋🏼 {message.author.mention} is available for a file.\n-# - Requesting Editor's default Time Block is {time_block.value}.", mention_author=True)
+        await message.reply(f"👋🏼 {message.author.mention} is available for a file.\n-# - Added to the queue (Default Time Block is 00:00 - 08:00 EST).", mention_author=True)
         
         queue_pos = len(work_queue)
         time_tag = get_time_tag()
         dm_content = (
             f"# Hello {message.author.mention}!\n"
-            f"# You are added to the queue at {time_tag}.\n\n"
+            f"# You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
             f"**IMPORTANT REMINDERS:**\n"
             f"- Audio project assignments are NOT preference-based.\n"
             f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
@@ -655,7 +716,7 @@ async def tattimer(interaction: discord.Interaction, file_type: app_commands.Cho
 async def available(interaction: discord.Interaction, time_block: app_commands.Choice[str]):
     last_used = available_cooldowns.get(interaction.user.id, 0)
     now_ts = datetime.now().timestamp()
-    if now_ts - last_used < 600:
+    if now_ts - last_used < 30:
         await interaction.response.send_message("⏳ Please wait a moment before using this again.", ephemeral=True)
         return
     available_cooldowns[interaction.user.id] = now_ts
@@ -670,7 +731,7 @@ async def available(interaction: discord.Interaction, time_block: app_commands.C
         await interaction.response.send_message(warn_msg, ephemeral=True)
         return
 
-    await interaction.response.send_message(f"👋🏼 {interaction.user.mention} is available for a file.\n-# - Requesting Editor's default Time Block is {time_block.value}.")
+    await interaction.response.send_message(f"👋🏼 {interaction.user.mention} is available for a file.\n-# - Added to the queue ({time_block.value}).")
     msg = await interaction.original_response()
     
     work_queue.append({
@@ -686,7 +747,7 @@ async def available(interaction: discord.Interaction, time_block: app_commands.C
     time_tag = get_time_tag()
     dm_content = (
         f"# Hello {interaction.user.mention}!\n"
-        f"# You are added to the queue at {time_tag}.\n\n"
+        f"# You are added to the queue. As of {time_tag}, you are at queue #{queue_pos}.\n\n"
         f"**IMPORTANT REMINDERS:**\n"
         f"- Audio project assignments are NOT preference-based.\n"
         f"- Queue numbers are **NOT a guarantee** that files will be assigned chronologically.\n"
