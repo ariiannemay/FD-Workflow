@@ -24,9 +24,9 @@ def keep_alive():
 # ---------------------------
 
 # --- CONFIGURATION ---
-TOKEN = os.getenv("DISCORD_TOKEN") 
+TOKEN = os.getenv("DISCORD_TOKEN")
 SWC_ROLE_NAME = "Senior Workflow Coordinator"
-SWC_ROLE_IDS = [1391602377672491198, 1450395825208299582] 
+SWC_ROLE_IDS = [1391602377672491198, 1450395825208299582]
 
 FILE_CHOICES = [
     app_commands.Choice(name="Aiera Live", value="AIERA LIVE FILE"),
@@ -47,8 +47,8 @@ QUEUE_FILE = "queue.json"
 CONFIG_FILE = "config.json"
 
 work_queue = []
-server_configs = {} 
-available_cooldowns = {} 
+server_configs = {}
+available_cooldowns = {}
 
 def load_data():
     global work_queue, server_configs
@@ -441,20 +441,25 @@ class ReworkView(ui.View):
         await interaction.followup.send("📝 User notified (Noted).", ephemeral=True)
 
 # --- BOT SETUP ---
+class MyBot(commands.Bot):
+    async def setup_hook(self):
+        # We add the views here so they work after restart (Persistence)
+        self.add_view(RevertView(None, ""))
+        self.add_view(ReworkView(None, ""))
+
 intents = discord.Intents.default()
-intents.members = True
+intents.members = True # Ensure this is ON in Dev Portal
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = MyBot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
     load_data()
-    bot.add_view(RevertView(None, ""))
-    bot.add_view(ReworkView(None, ""))
     print(f'Logged in as {bot.user}')
 
 @bot.command(name="sync")
 async def sync(ctx, option: str = None):
+    # Security check
     if not any(role.id in SWC_ROLE_IDS for role in ctx.author.roles) and not ctx.author.guild_permissions.administrator:
         await ctx.send("⛔ You do not have permission to sync.")
         return
@@ -462,11 +467,13 @@ async def sync(ctx, option: str = None):
     msg = await ctx.send("🔄 Processing sync...")
     try:
         if option == "clear":
-            # Clears global commands to fix duplicates
-            bot.tree.clear_commands(guild=None)
-            await bot.tree.sync(guild=None)
-            await msg.edit(content="✅ Global commands cleared. Now use `!sync` again to load server commands.")
+            # This wipes commands to fix duplicates
+            bot.tree.clear_commands(guild=ctx.guild)
+            await bot.tree.sync(guild=ctx.guild)
+            await msg.edit(content="✅ Local guild commands cleared. Now run `!sync` to load the fresh code.")
         else:
+            # THIS IS THE FIX for "Synced 0"
+            # It copies the global commands (defined in code) to the current guild
             bot.tree.copy_global_to(guild=ctx.guild)
             synced = await bot.tree.sync(guild=ctx.guild)
             await msg.edit(content=f"✅ Synced {len(synced)} command(s) to this server.")
